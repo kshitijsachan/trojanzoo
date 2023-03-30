@@ -1,0 +1,12 @@
+epochs:
+  cifar10: 50
+lr:
+  cifar10: 0.01
+OptimType: Adam
+# lr_scheduler: True
+# lr_scheduler_type: CosineAnnealingLR
+grad_clip: 0.1
+validate_interval: 2
+save: True
+tensorboard: True
+log_dir: ./data/tensorboard/cifar10_resnet18

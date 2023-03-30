@@ -13,27 +13,26 @@ r"""
             }
 """
 
-from trojanzoo.utils.output import prints, ansi
-from trojanzoo.utils.module import Module, Param
-
-import os
 import json
+import os
+from typing import TYPE_CHECKING, Any
+
 import yaml
 
-from typing import TYPE_CHECKING
-from typing import Any
+from trojanzoo.utils.module import Module, Param
+from trojanzoo.utils.output import ansi, prints
+
 # config_dict['package']['dataset'] dataset.yml
 ConfigFileType = Module[str, Any | Param[str, Any]]
-ConfigType = Module[str, ConfigFileType]    # config_dict['package']
+ConfigType = Module[str, ConfigFileType]  # config_dict['package']
 if TYPE_CHECKING:
-    pass    # TODO: python 3.10
+    pass  # TODO: python 3.10
 
 
 config_path: dict[str, str] = {
-    'package': os.path.dirname(__file__),   # trojanzoo/configs/*/*.yml
-    'user': os.path.normpath(os.path.expanduser(
-        '~/.trojanzoo/configs/trojanzoo')),
-    'project': os.path.normpath('./configs/trojanzoo'),
+    "package": os.path.dirname(__file__),  # trojanzoo/configs/*/*.yml
+    "user": os.path.normpath(os.path.expanduser("~/.trojanzoo/configs/trojanzoo")),
+    "project": os.path.normpath("./configs/trojanzoo"),
 }
 
 
@@ -79,10 +78,9 @@ class Config:
             in :attr:`self.config_dict`.
             ``value = full_config[config_file][key][dataset_name]``.
     """
-    name = 'config'
+    name = "config"
 
-    def __init__(self, cmd_config_path: str = None,
-                 _base: 'Config' = None, **kwargs: str):
+    def __init__(self, cmd_config_path: str = None, _base: "Config" = None, **kwargs: str):
         self.config_path = kwargs
         # self._base = _base
         self.config_dict: dict[str, ConfigType] = {}
@@ -106,13 +104,13 @@ class Config:
             self._cmd_config_path = os.path.normpath(value)
             self.cmd_config = self.load_config(self._cmd_config_path)
             self.full_config = self.merge().update(self.cmd_config)
+            print(self.full_config["trainer"])
         else:
             self._cmd_config_path = value
             self.cmd_config = Module()
             self.full_config = self.merge()
 
-    def get_config(self, dataset_name: str, config: ConfigType = None,
-                   **kwargs) -> Param[str, Module[str, Any]]:
+    def get_config(self, dataset_name: str, config: ConfigType = None, **kwargs) -> Param[str, Module[str, Any]]:
         r"""Get config for specific dataset.
 
         Args:
@@ -129,8 +127,7 @@ class Config:
         config = config or Param(self.full_config, default=Module())
         # remove dataset_name Param
         for file_name, file_value in config.items():
-            if not isinstance(file_value, Module) and \
-                    not isinstance(file_value, dict):
+            if not isinstance(file_value, Module) and not isinstance(file_value, dict):
                 # TODO: remove the latter condition?
                 continue
             if isinstance(file_value, Param):
@@ -145,8 +142,7 @@ class Config:
         config.update(kwargs)
         return config
 
-    def merge(self, keys: list[str] = ['package', 'user', 'project']
-              ) -> ConfigType:
+    def merge(self, keys: list[str] = ["package", "user", "project"]) -> ConfigType:
         r"""Merge different configs of :attr:`keys` in :attr:`self.config_dict`.
 
         Args:
@@ -183,7 +179,7 @@ class Config:
         """
         if path is None:
             return {}
-        elif not isinstance(path, str):     # TODO: unnecessary
+        elif not isinstance(path, str):  # TODO: unnecessary
             raise TypeError(path)
         elif not os.path.exists(path):
             return Module()
@@ -193,16 +189,15 @@ class Config:
                 for _file in files:
                     name, ext = os.path.splitext(_file)
                     file_path = os.path.normpath(os.path.join(root, _file))
-                    assert name not in _dict.keys(
-                    ), f'filename conflicts: {file_path}'
-                    if ext in ['.yml', '.yaml', 'json']:
+                    assert name not in _dict.keys(), f"filename conflicts: {file_path}"
+                    if ext in [".yml", ".yaml", "json"]:
                         _dict.update(Config.load_config(file_path))
             return _dict
         elif os.path.isfile(path):
             name, ext = os.path.splitext(os.path.split(path)[1])
-            if ext in ['.yml', 'yaml', 'json']:
-                with open(path, 'r', encoding='utf-8') as f:
-                    if ext == 'json':
+            if ext in [".yml", "yaml", "json"]:
+                with open(path, "r", encoding="utf-8") as f:
+                    if ext == "json":
                         _dict = json.load(f.read())
                     else:
                         _dict = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -211,11 +206,10 @@ class Config:
             else:
                 return Module()
         else:
-            raise Exception(f'unknown: {path}')
+            raise Exception(f"unknown: {path}")
 
     @staticmethod
-    def organize_config_file(_dict: dict[str, Any | dict[str, Any]]
-                             ) -> ConfigFileType:
+    def organize_config_file(_dict: dict[str, Any | dict[str, Any]]) -> ConfigFileType:
         module = Module()
         for key, value in _dict.items():
             if isinstance(value, dict):
@@ -232,8 +226,7 @@ class Config:
     def keys(self):
         return self.config_dict.keys()
 
-    def summary(self, keys: str | list[str] = ['final'],
-                config: ConfigType = None, indent: int = 0):
+    def summary(self, keys: str | list[str] = ["final"], config: ConfigType = None, indent: int = 0):
         r"""Summary the config information.
 
         Args:
@@ -248,30 +241,27 @@ class Config:
                 Defaults to ``0``.
         """
         if isinstance(keys, list):
-            prints('{yellow}{0:<20s}{reset} '.format(
-                self.name, **ansi), indent=indent)
+            prints("{yellow}{0:<20s}{reset} ".format(self.name, **ansi), indent=indent)
             for key in keys:
                 if key in self.config_dict.items():
                     config = self.config_dict[key]
                 else:
                     match key:
-                        case 'cmd':
+                        case "cmd":
                             config = self.cmd_config
-                        case 'final':
+                        case "final":
                             config = self.full_config
                         case _:
                             raise KeyError(key)
                 self.summary(keys=key, config=config, indent=indent + 10)
         else:
             assert isinstance(keys, str) and config is not None
-            prints('{green}{0:<20s}{reset}'.format(
-                keys, **ansi), indent=indent)
+            prints("{green}{0:<20s}{reset}".format(keys, **ansi), indent=indent)
             for key, value in config.items():
-                prints('{blue_light}{0:<20s}{reset}'.format(
-                    key, **ansi), indent=indent + 10)
+                prints("{blue_light}{0:<20s}{reset}".format(key, **ansi), indent=indent + 10)
                 prints(value, indent=indent + 10)
-                prints('-' * 20, indent=indent + 10)
-            prints('-' * 30, indent=indent)
+                prints("-" * 20, indent=indent + 10)
+            prints("-" * 30, indent=indent)
 
     def __str__(self) -> str:
         return str(self.config_dict)

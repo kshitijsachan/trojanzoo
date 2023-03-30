@@ -1,0 +1,4 @@
+d: cifar10
+batch_size: 512
+valid_batch_size: 1024
+data_dir: ./data/data

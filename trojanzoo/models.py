@@ -1,39 +1,43 @@
 #!/usr/bin/env python3
 
+import argparse
+import os
+from collections import OrderedDict
+from collections.abc import Callable, Iterable
+
+# TODO: python 3.10
+from typing import TYPE_CHECKING, Generator, Iterator, Mapping
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.optimizer import Optimizer
+
+from trojanzoo.configs import Config  # TODO: python 3.10
 from trojanzoo.configs import config
 from trojanzoo.datasets import Dataset
 from trojanzoo.environ import env
-from trojanzoo.utils.fim import KFAC, EKFAC
-from trojanzoo.utils.model import (get_all_layer, get_layer, get_layer_name,
-                                   activate_params, accuracy, generate_target,
-                                   summary)
-from trojanzoo.utils.module import get_name, BasicObject
+from trojanzoo.utils.fim import EKFAC, KFAC
+from trojanzoo.utils.model import (
+    ExponentialMovingAverage,
+    accuracy,
+    activate_params,
+    generate_target,
+    get_all_layer,
+    get_layer,
+    get_layer_name,
+    summary,
+)
+from trojanzoo.utils.module import BasicObject, get_name
 from trojanzoo.utils.output import ansi, prints
 from trojanzoo.utils.tensor import add_noise
-from trojanzoo.utils.train import train, validate, compare
+from trojanzoo.utils.train import compare, train, validate
 
-import torch
-import torch.nn as nn
-import numpy as np
-import os
-from collections import OrderedDict
-from collections.abc import Iterable
-
-from typing import TYPE_CHECKING
-# TODO: python 3.10
-from typing import Generator, Iterator, Mapping
-from trojanzoo.configs import Config    # TODO: python 3.10
-from trojanzoo.utils.model import ExponentialMovingAverage
-from torch.optim.optimizer import Optimizer
-from torch.optim.lr_scheduler import _LRScheduler
-import argparse
-from collections.abc import Callable
 if TYPE_CHECKING:
     import torch.utils.data
 
-__all__ = ['_Model', 'Model',
-           'add_argument', 'create',
-           'output_available_models']
+__all__ = ["_Model", "Model", "add_argument", "create", "output_available_models"]
 
 
 class _Model(nn.Module):
@@ -56,7 +60,7 @@ class _Model(nn.Module):
     def __init__(self, num_classes: int = None, **kwargs):
         super().__init__()
         self.preprocess = self.define_preprocess(**kwargs)
-        self.features = self.define_features(**kwargs)   # feature extractor
+        self.features = self.define_features(**kwargs)  # feature extractor
         self.pool = nn.AdaptiveAvgPool2d((1, 1))  # average pooling
         self.flatten = nn.Flatten()
         self.classifier = self.define_classifier(num_classes=num_classes, **kwargs)  # classifier
@@ -82,12 +86,14 @@ class _Model(nn.Module):
         return nn.Identity()
 
     @staticmethod
-    def define_classifier(num_features: list[int] = [],
-                          num_classes: int = 1000,
-                          activation: type[nn.Module] = nn.ReLU,
-                          activation_inplace: bool = True,
-                          dropout: float = 0.0,
-                          **kwargs) -> nn.Sequential:
+    def define_classifier(
+        num_features: list[int] = [],
+        num_classes: int = 1000,
+        activation: type[nn.Module] = nn.ReLU,
+        activation_inplace: bool = True,
+        dropout: float = 0.0,
+        **kwargs,
+    ) -> nn.Sequential:
         r"""
         | Define classifier as
             ``(Linear -> Activation -> Dropout ) * (len(num_features) - 1) -> Linear``.
@@ -134,19 +140,17 @@ class _Model(nn.Module):
         if len(num_features) == 0:
             return seq
         if activation:
-            activation_name = activation.__name__.split('.')[-1].lower()
+            activation_name = activation.__name__.split(".")[-1].lower()
         if len(num_features) == 1:
-            seq.add_module('fc', nn.Linear(num_features[0], num_classes))
+            seq.add_module("fc", nn.Linear(num_features[0], num_classes))
         else:
             for i in range(len(num_features) - 1):
-                seq.add_module(
-                    f'fc{i + 1:d}', nn.Linear(num_features[i], num_features[i + 1]))
+                seq.add_module(f"fc{i + 1:d}", nn.Linear(num_features[i], num_features[i + 1]))
                 if activation:
-                    seq.add_module(f'{activation_name}{i + 1:d}',
-                                   activation(inplace=activation_inplace))
+                    seq.add_module(f"{activation_name}{i + 1:d}", activation(inplace=activation_inplace))
                 if dropout > 0:
-                    seq.add_module(f'dropout{i + 1:d}', nn.Dropout(p=dropout))
-            seq.add_module(f'fc{len(num_features):d}', nn.Linear(num_features[-1], num_classes))
+                    seq.add_module(f"dropout{i + 1:d}", nn.Dropout(p=dropout))
+            seq.add_module(f"fc{len(num_features):d}", nn.Linear(num_features[-1], num_classes))
         return seq
 
     def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -255,43 +259,41 @@ class Model(BasicObject):
             The concrete model class may override this method to add more arguments.
             For users, please use :func:`add_argument()` instead, which is more user-friendly.
         """
-        group.add_argument('-m', '--model', dest='model_name',
-                           help='model name '
-                           '(default: config[model][default_model])')
-        group.add_argument('--suffix',
-                           help='model name suffix (e.g., "_adv_train")')
-        group.add_argument('--pretrained', action='store_true',
-                           help='load local pretrained weights (default: False)')
-        group.add_argument('--official', action='store_true',
-                           help='load official pretrained weights (default: False)')
-        group.add_argument('--randomized_smooth',
-                           help='whether to use randomized smoothing '
-                           '(default: False)')
-        group.add_argument('--rs_sigma', type=float,
-                           help='randomized smoothing sampling std '
-                           '(default: 0.01)')
-        group.add_argument('--rs_n', type=int,
-                           help='randomized smoothing sampling number '
-                           '(default: 100)')
-        group.add_argument('--model_dir', help='directory to store pretrained models')
+        group.add_argument(
+            "-m", "--model", dest="model_name", help="model name " "(default: config[model][default_model])"
+        )
+        group.add_argument("--suffix", help='model name suffix (e.g., "_adv_train")')
+        group.add_argument("--pretrained", action="store_true", help="load local pretrained weights (default: False)")
+        group.add_argument("--official", action="store_true", help="load official pretrained weights (default: False)")
+        group.add_argument("--randomized_smooth", help="whether to use randomized smoothing " "(default: False)")
+        group.add_argument("--rs_sigma", type=float, help="randomized smoothing sampling std " "(default: 0.01)")
+        group.add_argument("--rs_n", type=int, help="randomized smoothing sampling number " "(default: 100)")
+        group.add_argument("--model_dir", help="directory to store pretrained models")
         return group
 
-    def __init__(self, name: str = 'model', suffix: str = None,
-                 model: type[_Model] | _Model = _Model,
-                 dataset: Dataset = None,
-                 num_classes: int = None, folder_path: str = None,
-                 official: bool = False, pretrained: bool = False,
-                 randomized_smooth: bool = False,
-                 rs_sigma: float = 0.01, rs_n: int = 100, **kwargs):
+    def __init__(
+        self,
+        name: str = "model",
+        suffix: str = None,
+        model: type[_Model] | _Model = _Model,
+        dataset: Dataset = None,
+        num_classes: int = None,
+        folder_path: str = None,
+        official: bool = False,
+        pretrained: bool = False,
+        randomized_smooth: bool = False,
+        rs_sigma: float = 0.01,
+        rs_n: int = 100,
+        **kwargs,
+    ):
         super().__init__()
-        self.param_list['model'] = ['folder_path']
+        self.param_list["model"] = ["folder_path"]
         if suffix is not None:
-            self.param_list['model'].append('suffix')
+            self.param_list["model"].append("suffix")
         else:
-            suffix = ''
+            suffix = ""
         if randomized_smooth:
-            self.param_list['model'].extend(
-                ['randomized_smooth', 'rs_sigma', 'rs_n'])
+            self.param_list["model"].extend(["randomized_smooth", "rs_sigma", "rs_n"])
         self.name: str = name
         self.dataset = dataset
         self.suffix = suffix
@@ -306,55 +308,60 @@ class Model(BasicObject):
                 os.makedirs(folder_path)
 
         # ------------Auto-------------- #
-        loss_weights: torch.Tensor = kwargs.get('loss_weights', None)
+        loss_weights: torch.Tensor = kwargs.get("loss_weights", None)
         if dataset:
             if not isinstance(dataset, Dataset):
-                raise TypeError(f'{type(dataset)=}    {dataset=}')
+                raise TypeError(f"{type(dataset)=}    {dataset=}")
             num_classes = num_classes or dataset.num_classes
-            loss_weights = kwargs.get('loss_weights', dataset.loss_weights)
+            loss_weights = kwargs.get("loss_weights", dataset.loss_weights)
         self.num_classes = num_classes  # number of classes
         # TODO: what device shall we save loss_weights?
         # numpy, torch, or torch.cuda.
 
         match loss_weights:
             case np.ndarray():
-                loss_weights = torch.from_numpy(loss_weights).to(device=env['device'], dtype=torch.float)
+                loss_weights = torch.from_numpy(loss_weights).to(device=env["device"], dtype=torch.float)
             case torch.Tensor():
-                loss_weights = loss_weights.to(device=env['device'], dtype=torch.float)
+                loss_weights = loss_weights.to(device=env["device"], dtype=torch.float)
 
         self.loss_weights = loss_weights
         self.layer_name_list: list[str] = None
 
         # ------------------------------ #
         self.criterion = self.define_criterion(weight=loss_weights)
-        self.criterion_noreduction = self.define_criterion(
-            weight=loss_weights, reduction='none')
+        self.criterion_noreduction = self.define_criterion(weight=loss_weights, reduction="none")
         self.softmax = nn.Softmax(dim=1)
         match model:
             case type():
                 if num_classes is not None:
-                    kwargs['num_classes'] = num_classes
+                    kwargs["num_classes"] = num_classes
                 self._model = model(name=name, dataset=dataset, **kwargs)
             case nn.Module():
                 self._model = model
             case _:
+                print(model, type(model))
                 raise TypeError(type(model))
         self.model = self.get_parallel_model(self._model)
         self.activate_params([])
         if official:
-            self.load('official')
+            self.load("official")
         if pretrained:
             self.load(verbose=True)
         self.eval()
-        if env['num_gpus']:
+        if env["num_gpus"]:
             self.cuda()
 
     # ----------------- Forward Operations ----------------------#
 
-    def get_logits(self, _input: torch.Tensor, parallel: bool = False,
-                   randomized_smooth: bool = None,
-                   rs_sigma: float = None, rs_n: int = None,
-                   **kwargs) -> torch.Tensor:
+    def get_logits(
+        self,
+        _input: torch.Tensor,
+        parallel: bool = False,
+        randomized_smooth: bool = None,
+        rs_sigma: float = None,
+        rs_n: int = None,
+        **kwargs,
+    ) -> torch.Tensor:
         r"""Get logits of :attr:`_input`.
 
         Note:
@@ -446,9 +453,7 @@ class Model(BasicObject):
         """
         return self.softmax(self(_input, **kwargs))
 
-    def get_target_prob(self, _input: torch.Tensor,
-                        target: int | list[int] | torch.Tensor,
-                        **kwargs) -> torch.Tensor:
+    def get_target_prob(self, _input: torch.Tensor, target: int | list[int] | torch.Tensor, **kwargs) -> torch.Tensor:
         r"""Get the probability w.r.t. :attr:`target` class of :attr:`_input`
         (using :any:`torch.gather`).
 
@@ -466,8 +471,7 @@ class Model(BasicObject):
                 target = [target] * len(_input)
             case list():
                 target = torch.tensor(target, device=_input.device)
-        return self.get_prob(_input, **kwargs).gather(
-            dim=1, index=target.unsqueeze(1)).flatten()
+        return self.get_prob(_input, **kwargs).gather(dim=1, index=target.unsqueeze(1)).flatten()
 
     def get_class(self, _input: torch.Tensor, **kwargs) -> torch.Tensor:
         r"""Get the class classification result of :attr:`_input`
@@ -483,9 +487,9 @@ class Model(BasicObject):
         """
         return self(_input, **kwargs).argmax(dim=-1)
 
-    def get_layer_name(self, depth: int = -1, prefix: str = '',
-                       use_filter: bool = True, non_leaf: bool = False,
-                       seq_only: bool = False) -> list[str]:
+    def get_layer_name(
+        self, depth: int = -1, prefix: str = "", use_filter: bool = True, non_leaf: bool = False, seq_only: bool = False
+    ) -> list[str]:
         r"""Get layer names of model instance.
 
         Args:
@@ -514,14 +518,19 @@ class Model(BasicObject):
             The implementation is in
             :func:`trojanzoo.utils.model.get_layer_name()`.
         """
-        return get_layer_name(self._model, depth, prefix,
-                              use_filter, non_leaf, seq_only)
+        return get_layer_name(self._model, depth, prefix, use_filter, non_leaf, seq_only)
 
-    def get_all_layer(self, _input: torch.Tensor,
-                      layer_input: str = 'input', depth: int = -1,
-                      prefix='', use_filter: bool = True, non_leaf: bool = False,
-                      seq_only: bool = True, verbose: int = 0
-                      ) -> dict[str, torch.Tensor]:
+    def get_all_layer(
+        self,
+        _input: torch.Tensor,
+        layer_input: str = "input",
+        depth: int = -1,
+        prefix="",
+        use_filter: bool = True,
+        non_leaf: bool = False,
+        seq_only: bool = True,
+        verbose: int = 0,
+    ) -> dict[str, torch.Tensor]:
         r"""Get all intermediate layer outputs of
         :attr:`_input` from any intermediate layer.
 
@@ -565,12 +574,11 @@ class Model(BasicObject):
             The implementation is in
             :func:`trojanzoo.utils.model.get_all_layer()`.
         """
-        return get_all_layer(self._model, _input, layer_input, depth,
-                             prefix, use_filter, non_leaf, seq_only, verbose)
+        return get_all_layer(self._model, _input, layer_input, depth, prefix, use_filter, non_leaf, seq_only, verbose)
 
-    def get_layer(self, _input: torch.Tensor, layer_output: str = 'classifier',
-                  layer_input: str = 'input',
-                  seq_only: bool = True) -> torch.Tensor:
+    def get_layer(
+        self, _input: torch.Tensor, layer_output: str = "classifier", layer_input: str = "input", seq_only: bool = True
+    ) -> torch.Tensor:
         r"""Get one certain intermediate layer output
         of :attr:`_input` from any intermediate layer.
 
@@ -593,26 +601,30 @@ class Model(BasicObject):
             The implementation is in
             :func:`trojanzoo.utils.model.get_layer()`.
         """
-        if layer_input == 'input':
+        if layer_input == "input":
             match layer_output:
-                case 'classifier':
+                case "classifier":
                     return self(_input)
-                case 'features':
+                case "features":
                     return self._model.get_fm(_input)
-                case 'flatten':
+                case "flatten":
                     return self.get_final_fm(_input)
         if self.layer_name_list is None:
-            self.layer_name_list: list[str] = self.get_layer_name(
-                use_filter=False, non_leaf=True)
-            self.layer_name_list.insert(0, 'input')
-            self.layer_name_list.append('output')
-        return get_layer(self._model, _input, layer_output, layer_input,
-                         layer_name_list=self.layer_name_list,
-                         seq_only=seq_only)
+            self.layer_name_list: list[str] = self.get_layer_name(use_filter=False, non_leaf=True)
+            self.layer_name_list.insert(0, "input")
+            self.layer_name_list.append("output")
+        return get_layer(
+            self._model, _input, layer_output, layer_input, layer_name_list=self.layer_name_list, seq_only=seq_only
+        )
 
-    def loss(self, _input: torch.Tensor = None, _label: torch.Tensor = None,
-             _output: torch.Tensor = None, reduction: str = 'mean',
-             **kwargs) -> torch.Tensor:
+    def loss(
+        self,
+        _input: torch.Tensor = None,
+        _label: torch.Tensor = None,
+        _output: torch.Tensor = None,
+        reduction: str = "mean",
+        **kwargs,
+    ) -> torch.Tensor:
         r"""Calculate the loss using :attr:`self.criterion`
         (:attr:`self.criterion_noreduction`).
 
@@ -634,8 +646,7 @@ class Model(BasicObject):
             torch.Tensor:
                 A scalar loss tensor (with shape ``(N)`` if ``reduction='none'``).
         """
-        criterion = self.criterion_noreduction if reduction == 'none' \
-            else self.criterion
+        criterion = self.criterion_noreduction if reduction == "none" else self.criterion
         if _output is None:
             _output = self(_input, **kwargs)
         return criterion(_output, _label)
@@ -643,16 +654,23 @@ class Model(BasicObject):
     # -------------------------------------------------------- #
 
     def define_optimizer(
-            self, parameters: str | Iterator[nn.Parameter] = 'full',
-            OptimType: str | type[Optimizer] = 'SGD',
-            lr: float = 0.1, momentum: float = 0.0, weight_decay: float = 0.0,
-            lr_scheduler: bool = False,
-            lr_scheduler_type: str = 'CosineAnnealingLR',
-            lr_step_size: int = 30, lr_gamma: float = 0.1,
-            epochs: int = None, lr_min: float = 0.0,
-            lr_warmup_epochs: int = 0, lr_warmup_method: str = 'constant',
-            lr_warmup_decay: float = 0.01,
-            **kwargs) -> tuple[Optimizer, _LRScheduler]:
+        self,
+        parameters: str | Iterator[nn.Parameter] = "full",
+        OptimType: str | type[Optimizer] = "SGD",
+        lr: float = 0.1,
+        momentum: float = 0.0,
+        weight_decay: float = 0.0,
+        lr_scheduler: bool = False,
+        lr_scheduler_type: str = "CosineAnnealingLR",
+        lr_step_size: int = 30,
+        lr_gamma: float = 0.1,
+        epochs: int = None,
+        lr_min: float = 0.0,
+        lr_warmup_epochs: int = 0,
+        lr_warmup_method: str = "constant",
+        lr_warmup_decay: float = 0.01,
+        **kwargs,
+    ) -> tuple[Optimizer, _LRScheduler]:
         r"""Define optimizer and lr_scheduler.
 
         Args:
@@ -709,15 +727,15 @@ class Model(BasicObject):
             (torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler):
                 The tuple of optimizer and lr_scheduler.
         """
-        kwargs['momentum'] = momentum
-        kwargs['weight_decay'] = weight_decay
+        kwargs["momentum"] = momentum
+        kwargs["weight_decay"] = weight_decay
         match parameters:
             case str():
                 parameters = self.get_parameter_from_name(name=parameters)
             case Iterable():
                 pass
             case _:
-                raise TypeError(f'{type(parameters)=}    {parameters=}')
+                raise TypeError(f"{type(parameters)=}    {parameters=}")
         if isinstance(OptimType, str):
             OptimType: type[Optimizer] = getattr(torch.optim, OptimType)
         keys = OptimType.__init__.__code__.co_varnames
@@ -727,38 +745,39 @@ class Model(BasicObject):
         if lr_scheduler:
             main_lr_scheduler: _LRScheduler
             match lr_scheduler_type:
-                case 'StepLR':
+                case "StepLR":
                     main_lr_scheduler = torch.optim.lr_scheduler.StepLR(
-                        optimizer, step_size=lr_step_size, gamma=lr_gamma)
-                case 'CosineAnnealingLR':
+                        optimizer, step_size=lr_step_size, gamma=lr_gamma
+                    )
+                case "CosineAnnealingLR":
                     main_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                        optimizer, T_max=epochs - lr_warmup_epochs, eta_min=lr_min)
-                case 'ExponentialLR':
-                    main_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                        optimizer, gamma=lr_gamma)
+                        optimizer, T_max=epochs - lr_warmup_epochs, eta_min=lr_min
+                    )
+                case "ExponentialLR":
+                    main_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_gamma)
                 case _:
                     raise NotImplementedError(
-                        f'Invalid {lr_scheduler_type=}.'
+                        f"Invalid {lr_scheduler_type=}."
                         'Only "StepLR", "CosineAnnealingLR" and "ExponentialLR" '
-                        'are supported.')
+                        "are supported."
+                    )
             if lr_warmup_epochs > 0:
                 match lr_warmup_method:
-                    case 'linear':
+                    case "linear":
                         warmup_lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-                            optimizer, start_factor=lr_warmup_decay,
-                            total_iters=lr_warmup_epochs)
-                    case 'constant':
+                            optimizer, start_factor=lr_warmup_decay, total_iters=lr_warmup_epochs
+                        )
+                    case "constant":
                         warmup_lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
-                            optimizer, factor=lr_warmup_decay,
-                            total_iters=lr_warmup_epochs)
+                            optimizer, factor=lr_warmup_decay, total_iters=lr_warmup_epochs
+                        )
                     case _:
                         raise NotImplementedError(
-                            f'Invalid {lr_warmup_method=}.'
-                            'Only "linear" and "constant" are supported.')
+                            f"Invalid {lr_warmup_method=}." 'Only "linear" and "constant" are supported.'
+                        )
                 _lr_scheduler = torch.optim.lr_scheduler.SequentialLR(
-                    optimizer,
-                    schedulers=[warmup_lr_scheduler, main_lr_scheduler],
-                    milestones=[lr_warmup_epochs])
+                    optimizer, schedulers=[warmup_lr_scheduler, main_lr_scheduler], milestones=[lr_warmup_epochs]
+                )
             else:
                 _lr_scheduler = main_lr_scheduler
         return optimizer, _lr_scheduler
@@ -774,8 +793,8 @@ class Model(BasicObject):
                 Defaults to :attr:`self.loss_weights`.
             **kwargs: Keyword arguments passed to :any:`torch.nn.CrossEntropyLoss`.
         """
-        if 'weight' not in kwargs.keys():
-            kwargs['weight'] = self.loss_weights
+        if "weight" not in kwargs.keys():
+            kwargs["weight"] = self.loss_weights
         return nn.CrossEntropyLoss(**kwargs)
         # if loss_type == 'jsd':
         #     num_classes = num_classes if num_classes is not None \
@@ -792,12 +811,19 @@ class Model(BasicObject):
     # ---------------------Load & Save Model------------------------- #
 
     @torch.no_grad()
-    def load(self, file_path: str = None, folder_path: str = None,
-             suffix: str = None, inplace: bool = True,
-             map_location: str | Callable | torch.device | dict = 'cpu',
-             component: str = 'full', strict: bool = True,
-             verbose: bool = False, indent: int = 0,
-             **kwargs) -> OrderedDict[str, torch.Tensor]:
+    def load(
+        self,
+        file_path: str = None,
+        folder_path: str = None,
+        suffix: str = None,
+        inplace: bool = True,
+        map_location: str | Callable | torch.device | dict = "cpu",
+        component: str = "full",
+        strict: bool = True,
+        verbose: bool = False,
+        indent: int = 0,
+        **kwargs,
+    ) -> OrderedDict[str, torch.Tensor]:
         r"""Load pretrained model weights.
 
         Args:
@@ -833,20 +859,15 @@ class Model(BasicObject):
         Returns:
             OrderedDict[str, torch.Tensor]: The model weights OrderedDict.
         """
-        map_location = map_location if map_location != 'default' \
-            else env['device']
+        map_location = map_location if map_location != "default" else env["device"]
         if file_path is None:
-            folder_path = folder_path if folder_path is not None \
-                else self.folder_path
+            folder_path = folder_path if folder_path is not None else self.folder_path
             suffix = suffix if suffix is not None else self.suffix
-            file_path = os.path.normpath(os.path.join(
-                folder_path, f'{self.name}{suffix}.pth'))
-        if file_path == 'official':   # TODO
+            file_path = os.path.normpath(os.path.join(folder_path, f"{self.name}{suffix}.pth"))
+        if file_path == "official":  # TODO
             _dict = self.get_official_weights(map_location=map_location)
-            last_bias_value = next(
-                reversed(_dict.values()))   # TODO: make sure
-            if self.num_classes != len(last_bias_value) \
-                    and component != 'features':
+            last_bias_value = next(reversed(_dict.values()))  # TODO: make sure
+            if self.num_classes != len(last_bias_value) and component != "features":
                 strict = False
                 _dict.popitem()
                 _dict.popitem()
@@ -854,43 +875,43 @@ class Model(BasicObject):
             try:
                 # TODO: type annotation might change?
                 # dict[str, torch.Tensor]
-                _dict: OrderedDict[str, torch.Tensor] = torch.load(
-                    file_path, map_location=map_location, **kwargs)
+                _dict: OrderedDict[str, torch.Tensor] = torch.load(file_path, map_location=map_location, **kwargs)
             except Exception:
-                print(f'{file_path=}')
+                print(f"{file_path=}")
                 raise
         module = self._model
         match component:
-            case 'features':
+            case "features":
                 module = self._model.features
-                _dict = OrderedDict(
-                    [(key.removeprefix('features.'), value)
-                        for key, value in _dict.items()])
-            case 'classifier':
+                _dict = OrderedDict([(key.removeprefix("features."), value) for key, value in _dict.items()])
+            case "classifier":
                 module = self._model.classifier
-                _dict = OrderedDict(
-                    [(key.removeprefix('classifier.'), value)
-                        for key, value in _dict.items()])
+                _dict = OrderedDict([(key.removeprefix("classifier."), value) for key, value in _dict.items()])
             case _:
-                assert component == 'full', f'{component=}'
+                assert component == "full", f"{component=}"
         if inplace:
             try:
                 module.load_state_dict(_dict, strict=strict)
             except RuntimeError:
-                prints(f'Model {self.name} loaded from: {file_path}',
-                       indent=indent)
+                prints(f"Model {self.name} loaded from: {file_path}", indent=indent)
                 raise
         if verbose:
-            prints(f'Model {self.name} loaded from: {file_path}',
-                   indent=indent)
-        if env['num_gpus']:
+            prints(f"Model {self.name} loaded from: {file_path}", indent=indent)
+        if env["num_gpus"]:
             self.cuda()
         return _dict
 
     @torch.no_grad()
-    def save(self, file_path: str = None, folder_path: str = None,
-             suffix: str = None, component: str = '',
-             verbose: bool = False, indent: int = 0, **kwargs):
+    def save(
+        self,
+        file_path: str = None,
+        folder_path: str = None,
+        suffix: str = None,
+        component: str = "",
+        verbose: bool = False,
+        indent: int = 0,
+        **kwargs,
+    ):
         r"""Save pretrained model weights.
 
         Args:
@@ -910,33 +931,29 @@ class Model(BasicObject):
             **kwargs: Keyword arguments passed to :any:`torch.save`.
         """
         if file_path is None:
-            folder_path = folder_path if folder_path is not None \
-                else self.folder_path
+            folder_path = folder_path if folder_path is not None else self.folder_path
             suffix = suffix if suffix is not None else self.suffix
-            file_path = os.path.normpath(os.path.join(
-                folder_path, f'{self.name}{suffix}.pth'))
+            file_path = os.path.normpath(os.path.join(folder_path, f"{self.name}{suffix}.pth"))
         else:
             folder_path = os.path.dirname(file_path)
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
         # TODO: type annotation might change? dict[str, torch.Tensor]
         module = self._model
-        if component == 'features':
+        if component == "features":
             module = self._model.features
-        elif component == 'classifier':
+        elif component == "classifier":
             module = self._model.classifier
         else:
-            assert component == '', f'{component=}'
-        _dict: OrderedDict[str, torch.Tensor] = module.state_dict(
-            prefix=component)
+            assert component == "", f"{component=}"
+        _dict: OrderedDict[str, torch.Tensor] = module.state_dict(prefix=component)
         torch.save(_dict, file_path, **kwargs)
         if verbose:
-            prints(
-                f'Model {self.name} saved at: {file_path}', indent=indent)
+            prints(f"Model {self.name} saved at: {file_path}", indent=indent)
 
-    def get_official_weights(self, url: str = None,
-                             map_location: str | Callable | torch.device | dict = 'cpu',
-                             **kwargs) -> OrderedDict[str, torch.Tensor]:
+    def get_official_weights(
+        self, url: str = None, map_location: str | Callable | torch.device | dict = "cpu", **kwargs
+    ) -> OrderedDict[str, torch.Tensor]:
         r"""Get official model weights from :attr:`url`.
 
         Args:
@@ -952,78 +969,118 @@ class Model(BasicObject):
             OrderedDict[str, torch.Tensor]: The model weights OrderedDict.
         """
         url = self.model_urls[self.name] if url is None else url
-        print('get official model weights from: ', url)
+        print("get official model weights from: ", url)
         return torch.hub.load_state_dict_from_url(url, map_location=map_location, **kwargs)
 
     # ---------------------Train and Validate--------------------- #
     # TODO: annotation and remove those arguments to be *args, **kwargs
-    def _train(self, epochs: int, optimizer: Optimizer,
-               module: nn.Module = None, num_classes: int = None,
-               lr_scheduler: _LRScheduler = None,
-               lr_warmup_epochs: int = 0,
-               model_ema: ExponentialMovingAverage = None,
-               model_ema_steps: int = 32,
-               grad_clip: float = None, pre_conditioner: None | KFAC | EKFAC = None,
-               print_prefix: str = 'Train', start_epoch: int = 0, resume: int = 0,
-               validate_interval: int = 10, save: bool = False, amp: bool = False,
-               loader_train: torch.utils.data.DataLoader = None,
-               loader_valid: torch.utils.data.DataLoader = None,
-               epoch_fn: Callable[..., None] = None,
-               get_data_fn: Callable[
-                   ..., tuple[torch.Tensor, torch.Tensor]] = None,
-               loss_fn: Callable[..., torch.Tensor] = None,
-               after_loss_fn: Callable[..., None] = None,
-               validate_fn: Callable[..., tuple[float, float]] = None,
-               save_fn: Callable[..., None] = None, file_path: str = None,
-               folder_path: str = None, suffix: str = None,
-               writer=None, main_tag: str = 'train', tag: str = '',
-               accuracy_fn: Callable[..., list[float]] = None,
-               verbose: bool = True, indent: int = 0, **kwargs):
+    def _train(
+        self,
+        epochs: int,
+        optimizer: Optimizer,
+        module: nn.Module = None,
+        num_classes: int = None,
+        lr_scheduler: _LRScheduler = None,
+        lr_warmup_epochs: int = 0,
+        model_ema: ExponentialMovingAverage = None,
+        model_ema_steps: int = 32,
+        grad_clip: float = None,
+        pre_conditioner: None | KFAC | EKFAC = None,
+        print_prefix: str = "Train",
+        start_epoch: int = 0,
+        resume: int = 0,
+        validate_interval: int = 10,
+        save: bool = False,
+        amp: bool = False,
+        loader_train: torch.utils.data.DataLoader = None,
+        loader_valid: torch.utils.data.DataLoader = None,
+        epoch_fn: Callable[..., None] = None,
+        get_data_fn: Callable[..., tuple[torch.Tensor, torch.Tensor]] = None,
+        loss_fn: Callable[..., torch.Tensor] = None,
+        after_loss_fn: Callable[..., None] = None,
+        validate_fn: Callable[..., tuple[float, float]] = None,
+        save_fn: Callable[..., None] = None,
+        file_path: str = None,
+        folder_path: str = None,
+        suffix: str = None,
+        writer=None,
+        main_tag: str = "train",
+        tag: str = "",
+        accuracy_fn: Callable[..., list[float]] = None,
+        verbose: bool = True,
+        indent: int = 0,
+        **kwargs,
+    ):
         r"""Train the model"""
         module = module or self._model
         num_classes = num_classes or self.num_classes
-        loader_train = loader_train or self.dataset.loader['train']
+        loader_train = loader_train or self.dataset.loader["train"]
         get_data_fn = get_data_fn if callable(get_data_fn) else self.get_data
         loss_fn = loss_fn if callable(loss_fn) else self.loss
         validate_fn = validate_fn if callable(validate_fn) else self._validate
         save_fn = save_fn if callable(save_fn) else self.save
         accuracy_fn = accuracy_fn if callable(accuracy_fn) else self.accuracy
-        kwargs['forward_fn'] = kwargs.get('forward_fn', self.__call__)
+        kwargs["forward_fn"] = kwargs.get("forward_fn", self.__call__)
         # if not callable(iter_fn) and hasattr(self, 'iter_fn'):
         #     iter_fn = getattr(self, 'iter_fn')
-        if not callable(epoch_fn) and hasattr(self, 'epoch_fn'):
-            epoch_fn = getattr(self, 'epoch_fn')
-        if not callable(after_loss_fn) and hasattr(self, 'after_loss_fn'):
-            after_loss_fn = getattr(self, 'after_loss_fn')
-        return train(module=module, num_classes=num_classes,
-                     epochs=epochs, optimizer=optimizer, lr_scheduler=lr_scheduler,
-                     lr_warmup_epochs=lr_warmup_epochs,
-                     model_ema=model_ema, model_ema_steps=model_ema_steps,
-                     grad_clip=grad_clip, pre_conditioner=pre_conditioner,
-                     print_prefix=print_prefix, start_epoch=start_epoch,
-                     resume=resume, validate_interval=validate_interval,
-                     save=save, amp=amp,
-                     loader_train=loader_train, loader_valid=loader_valid,
-                     epoch_fn=epoch_fn, get_data_fn=get_data_fn,
-                     loss_fn=loss_fn, after_loss_fn=after_loss_fn,
-                     validate_fn=validate_fn,
-                     save_fn=save_fn, file_path=file_path,
-                     folder_path=folder_path, suffix=suffix,
-                     writer=writer, main_tag=main_tag, tag=tag,
-                     accuracy_fn=accuracy_fn,
-                     verbose=verbose, indent=indent, **kwargs)
+        if not callable(epoch_fn) and hasattr(self, "epoch_fn"):
+            epoch_fn = getattr(self, "epoch_fn")
+        if not callable(after_loss_fn) and hasattr(self, "after_loss_fn"):
+            after_loss_fn = getattr(self, "after_loss_fn")
+        return train(
+            module=module,
+            num_classes=num_classes,
+            epochs=epochs,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            lr_warmup_epochs=lr_warmup_epochs,
+            model_ema=model_ema,
+            model_ema_steps=model_ema_steps,
+            grad_clip=grad_clip,
+            pre_conditioner=pre_conditioner,
+            print_prefix=print_prefix,
+            start_epoch=start_epoch,
+            resume=resume,
+            validate_interval=validate_interval,
+            save=save,
+            amp=amp,
+            loader_train=loader_train,
+            loader_valid=loader_valid,
+            epoch_fn=epoch_fn,
+            get_data_fn=get_data_fn,
+            loss_fn=loss_fn,
+            after_loss_fn=after_loss_fn,
+            validate_fn=validate_fn,
+            save_fn=save_fn,
+            file_path=file_path,
+            folder_path=folder_path,
+            suffix=suffix,
+            writer=writer,
+            main_tag=main_tag,
+            tag=tag,
+            accuracy_fn=accuracy_fn,
+            verbose=verbose,
+            indent=indent,
+            **kwargs,
+        )
 
-    def _validate(self, module: nn.Module = None, num_classes: int = None,
-                  loader: torch.utils.data.DataLoader = None,
-                  print_prefix: str = 'Validate',
-                  indent: int = 0, verbose: bool = True,
-                  get_data_fn: Callable[
-                      ..., tuple[torch.Tensor, torch.Tensor]] = None,
-                  loss_fn: Callable[..., torch.Tensor] = None,
-                  writer=None, main_tag: str = 'valid',
-                  tag: str = '', _epoch: int = None,
-                  accuracy_fn: Callable[..., list[float]] = None,
-                  **kwargs) -> tuple[float, float]:
+    def _validate(
+        self,
+        module: nn.Module = None,
+        num_classes: int = None,
+        loader: torch.utils.data.DataLoader = None,
+        print_prefix: str = "Validate",
+        indent: int = 0,
+        verbose: bool = True,
+        get_data_fn: Callable[..., tuple[torch.Tensor, torch.Tensor]] = None,
+        loss_fn: Callable[..., torch.Tensor] = None,
+        writer=None,
+        main_tag: str = "valid",
+        tag: str = "",
+        _epoch: int = None,
+        accuracy_fn: Callable[..., list[float]] = None,
+        **kwargs,
+    ) -> tuple[float, float]:
         r"""Evaluate the model.
 
         Returns:
@@ -1031,33 +1088,45 @@ class Model(BasicObject):
         """
         module = module or self._model
         num_classes = num_classes or self.num_classes
-        loader = loader or self.dataset.loader['valid']
+        loader = loader or self.dataset.loader["valid"]
         get_data_fn = get_data_fn or self.get_data
         loss_fn = loss_fn or self.loss
         accuracy_fn = accuracy_fn if callable(accuracy_fn) else self.accuracy
-        kwargs['forward_fn'] = kwargs.get('forward_fn', self.__call__)
-        return validate(module=module, num_classes=num_classes, loader=loader,
-                        print_prefix=print_prefix,
-                        indent=indent, verbose=verbose,
-                        get_data_fn=get_data_fn,
-                        loss_fn=loss_fn,
-                        writer=writer, main_tag=main_tag, tag=tag,
-                        _epoch=_epoch, accuracy_fn=accuracy_fn, **kwargs)
+        kwargs["forward_fn"] = kwargs.get("forward_fn", self.__call__)
+        return validate(
+            module=module,
+            num_classes=num_classes,
+            loader=loader,
+            print_prefix=print_prefix,
+            indent=indent,
+            verbose=verbose,
+            get_data_fn=get_data_fn,
+            loss_fn=loss_fn,
+            writer=writer,
+            main_tag=main_tag,
+            tag=tag,
+            _epoch=_epoch,
+            accuracy_fn=accuracy_fn,
+            **kwargs,
+        )
 
-    def _compare(self, peer: nn.Module = None,
-                 loader: torch.utils.data.DataLoader = None,
-                 print_prefix: str = 'Validate',
-                 indent: int = 0, verbose: bool = True,
-                 get_data_fn: Callable[
-                     ..., tuple[torch.Tensor, torch.Tensor]] = None,
-                 criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
-                 **kwargs) -> tuple[float, float]:
-        loader = loader or self.dataset.loader['valid']
+    def _compare(
+        self,
+        peer: nn.Module = None,
+        loader: torch.utils.data.DataLoader = None,
+        print_prefix: str = "Validate",
+        indent: int = 0,
+        verbose: bool = True,
+        get_data_fn: Callable[..., tuple[torch.Tensor, torch.Tensor]] = None,
+        criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
+        **kwargs,
+    ) -> tuple[float, float]:
+        loader = loader or self.dataset.loader["valid"]
         get_data_fn = get_data_fn or self.get_data
         criterion = criterion or self.criterion
-        return compare(self, peer, loader,
-                       print_prefix, indent, verbose,
-                       get_data_fn, criterion=self.criterion, **kwargs)
+        return compare(
+            self, peer, loader, print_prefix, indent, verbose, get_data_fn, criterion=self.criterion, **kwargs
+        )
 
     # ----------------------------Utility--------------------------- #
 
@@ -1078,9 +1147,9 @@ class Model(BasicObject):
         else:
             return data
 
-    def accuracy(self, _output: torch.Tensor, _label: torch.Tensor,
-                 num_classes: int = None,
-                 topk: tuple[int] = (1, 5)) -> list[float]:
+    def accuracy(
+        self, _output: torch.Tensor, _label: torch.Tensor, num_classes: int = None, topk: tuple[int] = (1, 5)
+    ) -> list[float]:
         r"""Computes the accuracy over the k top predictions
         for the specified values of k.
 
@@ -1129,12 +1198,11 @@ class Model(BasicObject):
         Returns:
             _Model | nn.DataParallel: The parallel model if there are more than 1 GPU avaiable.
         """
-        if env['num_gpus'] > 1:
+        if env["num_gpus"] > 1:
             return nn.DataParallel(_model)
         return _model
 
-    def summary(self, depth: int = None, verbose: bool = True,
-                indent: int = 0, **kwargs):
+    def summary(self, depth: int = None, verbose: bool = True, indent: int = 0, **kwargs):
         r"""Prints a string summary of the model instance by calling
         :func:`trojanzoo.utils.module.BasicObject.summary()`
         and :func:`trojanzoo.utils.model.summary()`.
@@ -1153,12 +1221,11 @@ class Model(BasicObject):
         """
         super().summary(indent=indent)
         if depth is None:
-            depth = env['verbose']
+            depth = env["verbose"]
         if depth is None:
             depth = 1
-        summary(self._model, depth=depth, verbose=verbose,
-                indent=indent + 10, **kwargs)
-        prints('-' * 20, indent=indent + 10)
+        summary(self._model, depth=depth, verbose=verbose, indent=indent + 10, **kwargs)
+        prints("-" * 20, indent=indent + 10)
 
     # -------------------------------Reload---------------------------- #
 
@@ -1210,18 +1277,15 @@ class Model(BasicObject):
         """
         return self._model.zero_grad(set_to_none=set_to_none)
 
-    def state_dict(self, destination: Mapping[str, torch.Tensor] = None,
-                   prefix: str = '', keep_vars: bool = False):
+    def state_dict(self, destination: Mapping[str, torch.Tensor] = None, prefix: str = "", keep_vars: bool = False):
         r"""Returns a dictionary containing a whole state of the module.
 
         See Also:
             :any:`torch.nn.Module.state_dict`.
         """
-        return self._model.state_dict(destination=destination, prefix=prefix,
-                                      keep_vars=keep_vars)
+        return self._model.state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor],
-                        strict: bool = True):
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], strict: bool = True):
         r"""Copies parameters and buffers from :attr:`state_dict`
         into this module and its descendants.
 
@@ -1238,7 +1302,7 @@ class Model(BasicObject):
         """
         return self._model.parameters(recurse=recurse)
 
-    def named_parameters(self, prefix='', recurse=True):
+    def named_parameters(self, prefix="", recurse=True):
         r"""Returns an iterator over module parameters, yielding both the
         name of the parameter as well as the parameter itself.
 
@@ -1272,9 +1336,9 @@ class Model(BasicObject):
         """
         return self._model.modules()
 
-    def named_modules(self, memo: None | set[nn.Module] = None,
-                      prefix: str = ''
-                      ) -> Generator[tuple[str, nn.Module], None, None]:
+    def named_modules(
+        self, memo: None | set[nn.Module] = None, prefix: str = ""
+    ) -> Generator[tuple[str, nn.Module], None, None]:
         r"""Returns an iterator over all modules in the network, yielding
         both the name of the module as well as the module itself.
 
@@ -1283,7 +1347,7 @@ class Model(BasicObject):
         """
         return self._model.named_modules(memo=memo, prefix=prefix)
 
-    def apply(self, fn: Callable[['nn.Module'], None]):
+    def apply(self, fn: Callable[["nn.Module"], None]):
         r"""Applies ``fn`` recursively to every submodule (as returned by ``.children()``)
         as well as self. Typical use includes initializing the parameters of a model
 
@@ -1304,8 +1368,7 @@ class Model(BasicObject):
     # ----------------------------------------------------------------- #
 
     @torch.no_grad()
-    def remove_misclassify(self, data: tuple[torch.Tensor, torch.Tensor],
-                           **kwargs):
+    def remove_misclassify(self, data: tuple[torch.Tensor, torch.Tensor], **kwargs):
         r"""Remove misclassified samples in a data batch.
 
         Args:
@@ -1322,8 +1385,7 @@ class Model(BasicObject):
         repeat_idx = _classification.eq(_label)
         return _input[repeat_idx], _label[repeat_idx]
 
-    def generate_target(self, _input: torch.Tensor, idx: int = 1,
-                        same: bool = False) -> torch.Tensor:
+    def generate_target(self, _input: torch.Tensor, idx: int = 1, same: bool = False) -> torch.Tensor:
         r"""Generate target labels of a batched input based on
             the classification confidence ranking index.
 
@@ -1348,33 +1410,32 @@ class Model(BasicObject):
 
     # --------------------- Undocumented Methods ------------------------- #
 
-    def get_parameter_from_name(self, name: str = 'full'
-                                ) -> Iterator[nn.Parameter]:
+    def get_parameter_from_name(self, name: str = "full") -> Iterator[nn.Parameter]:
         match name:
-            case 'features':
+            case "features":
                 params = self._model.features.parameters()
-            case 'classifier' | 'partial':
+            case "classifier" | "partial":
                 params = self._model.classifier.parameters()
-            case 'full':
+            case "full":
                 params = self._model.parameters()
             case _:
-                raise NotImplementedError(f'{name=}')
+                raise NotImplementedError(f"{name=}")
         return params
 
-    def __call__(self, _input: torch.Tensor, amp: bool = False,
-                 **kwargs) -> torch.Tensor:
+    def __call__(self, _input: torch.Tensor, amp: bool = False, **kwargs) -> torch.Tensor:
         if amp:
             with torch.cuda.amp.autocast():
                 return self.get_logits(_input, **kwargs)
         return self.get_logits(_input, **kwargs)
 
 
-def add_argument(parser: argparse.ArgumentParser,
-                 model_name: None | str = None,
-                 model: None | str | Model = None,
-                 config: Config = config,
-                 class_dict: dict[str, type[Model]] = {}
-                 ) -> argparse._ArgumentGroup:
+def add_argument(
+    parser: argparse.ArgumentParser,
+    model_name: None | str = None,
+    model: None | str | Model = None,
+    config: Config = config,
+    class_dict: dict[str, type[Model]] = {},
+) -> argparse._ArgumentGroup:
     r"""
     | Add model arguments to argument parser.
     | For specific arguments implementation, see :meth:`Model.add_argument()`.
@@ -1393,32 +1454,33 @@ def add_argument(parser: argparse.ArgumentParser,
     Returns:
         argparse._ArgumentGroup: The argument group.
     """
-    dataset_name = get_name(arg_list=['-d', '--dataset'])
+    dataset_name = get_name(arg_list=["-d", "--dataset"])
     if dataset_name is None:
-        dataset_name = config.full_config['dataset']['default_dataset']
-    model_name = get_name(name=model_name, module=model,
-                          arg_list=['-m', '--model'])
+        dataset_name = config.full_config["dataset"]["default_dataset"]
+    model_name = get_name(name=model_name, module=model, arg_list=["-m", "--model"])
     if model_name is None:
-        model_name = config.get_config(dataset_name=dataset_name)[
-            'model']['default_model']
+        model_name = config.get_config(dataset_name=dataset_name)["model"]["default_model"]
     model_name = get_model_class(model_name, class_dict=class_dict)
 
-    group = parser.add_argument_group(
-        '{yellow}model{reset}'.format(**ansi), description=model_name)
+    group = parser.add_argument_group("{yellow}model{reset}".format(**ansi), description=model_name)
     model_class_name = get_model_class(model_name, class_dict=class_dict)
     try:
         ModelType = class_dict[model_class_name]
     except KeyError:
-        print(f'{model_class_name} not in \n{list(class_dict.keys())}')
+        print(f"{model_class_name} not in \n{list(class_dict.keys())}")
         raise
     return ModelType.add_argument(group)
 
 
-def create(model_name: None | str = None, model: None | str | Model = None,
-           dataset_name: None | str = None, dataset: None | str | Dataset = None,
-           config: Config = config,
-           class_dict: dict[str, type[Model]] = {},
-           **kwargs) -> Model:
+def create(
+    model_name: None | str = None,
+    model: None | str | Model = None,
+    dataset_name: None | str = None,
+    dataset: None | str | Dataset = None,
+    config: Config = config,
+    class_dict: dict[str, type[Model]] = {},
+    **kwargs,
+) -> Model:
     r"""
     | Create a model instance.
     | For arguments not included in :attr:`kwargs`,
@@ -1445,41 +1507,31 @@ def create(model_name: None | str = None, model: None | str | Model = None,
     Returns:
         Model: The model instance.
     """
-    dataset_name = get_name(
-        name=dataset_name, module=dataset, arg_list=['-d', '--dataset'])
-    model_name = get_name(name=model_name, module=model,
-                          arg_list=['-m', '--model'])
+    dataset_name = get_name(name=dataset_name, module=dataset, arg_list=["-d", "--dataset"])
+    model_name = get_name(name=model_name, module=model, arg_list=["-m", "--model"])
     if dataset_name is None:
-        dataset_name = config.full_config['dataset']['default_dataset']
+        dataset_name = config.full_config["dataset"]["default_dataset"]
     if model_name is None:
-        model_name = config.get_config(dataset_name=dataset_name)[
-            'model']['default_model']
-    result = config.get_config(dataset_name=dataset_name)[
-        'model'].update(kwargs)
-    model_name = model_name if model_name is not None \
-        else result['default_model']
+        model_name = config.get_config(dataset_name=dataset_name)["model"]["default_model"]
+    result = config.get_config(dataset_name=dataset_name)["model"].update(kwargs)
+    model_name = model_name if model_name is not None else result["default_model"]
 
-    name_list = [name for sub_list in get_available_models(
-        class_dict=class_dict).values()
-        for name in sub_list]
+    name_list = [name for sub_list in get_available_models(class_dict=class_dict).values() for name in sub_list]
     name_list = sorted(name_list)
-    assert model_name in name_list, f'{model_name} not in \n{name_list}'
+    assert model_name in name_list, f"{model_name} not in \n{name_list}"
     model_class_name = get_model_class(model_name, class_dict=class_dict)
     try:
         ModelType = class_dict[model_class_name]
     except KeyError:
-        print(f'{model_class_name} not in \n{list(class_dict.keys())}')
+        print(f"{model_class_name} not in \n{list(class_dict.keys())}")
         raise
 
-    if 'folder_path' not in result.keys() and isinstance(dataset, Dataset):
-        result['folder_path'] = os.path.join(result['model_dir'],
-                                             dataset.data_type,
-                                             dataset.name)
+    if "folder_path" not in result.keys() and isinstance(dataset, Dataset):
+        result["folder_path"] = os.path.join(result["model_dir"], dataset.data_type, dataset.name)
     return ModelType(name=model_name, dataset=dataset, dataset_name=dataset_name, **result)
 
 
-def output_available_models(class_dict: dict[str, type[Model]] = {},
-                            indent: int = 0) -> None:
+def output_available_models(class_dict: dict[str, type[Model]] = {}, indent: int = 0) -> None:
     r"""Output all available model names.
 
     Args:
@@ -1490,23 +1542,20 @@ def output_available_models(class_dict: dict[str, type[Model]] = {},
     """
     names_dict = get_available_models(class_dict)
     for k in sorted(names_dict.keys()):
-        prints('{yellow}{k}{reset}'.format(k=k, **ansi), indent=indent)
+        prints("{yellow}{k}{reset}".format(k=k, **ansi), indent=indent)
         prints(names_dict[k], indent=indent + 10)
         print()
 
 
-def get_available_models(class_dict: dict[str, type[Model]] = {}
-                         ) -> dict[str, list[str]]:
+def get_available_models(class_dict: dict[str, type[Model]] = {}) -> dict[str, list[str]]:
     return {k: v.available_models for k, v in class_dict.items()}
 
 
 def get_model_class(name: str, class_dict: dict[str, type[Model]] = {}) -> str:
     correct_name: str = None
     for class_name in class_dict.keys():
-        if class_name in name.lower() and \
-                (correct_name is None or
-                 len(class_name) > len(correct_name)):
+        if class_name in name.lower() and (correct_name is None or len(class_name) > len(correct_name)):
             correct_name = class_name
     if correct_name is not None:
         return correct_name
-    raise KeyError(f'{name} not in {list(class_dict.keys())}')
+    raise KeyError(f"{name} not in {list(class_dict.keys())}")
