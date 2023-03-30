@@ -1,2 +1,5 @@
 # %%
-from trojanvision.scripts import train
+from trojanvision.scripts.train import train
+
+# %%
+train
