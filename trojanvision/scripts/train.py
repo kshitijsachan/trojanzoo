@@ -13,22 +13,28 @@ CUDA_VISIBLE_DEVICES=0 python examples/train.py --verbose 1 --color --adv_train 
 CUDA_VISIBLE_DEVICES=0 python examples/train.py --verbose 1 --color --dataset mnist --adv_train --adv_train_random_init --adv_train_iter 1 --adv_train_alpha 0.375 --adv_train_eps 0.3 --adv_train_eval_iter 7 --adv_train_eval_alpha 0.1 --adv_train_eval_eps 0.3 --validate_interval 1 --epochs 15 --lr 0.1 --lr_scheduler
 """  # noqa: E501
 
-import trojanvision
 import argparse
 
-if __name__ == '__main__':
+import trojanvision
+
+
+def train(raw_args=None):
     parser = argparse.ArgumentParser()
     trojanvision.environ.add_argument(parser)
     trojanvision.datasets.add_argument(parser)
     trojanvision.models.add_argument(parser)
     trojanvision.trainer.add_argument(parser)
-    kwargs = parser.parse_args().__dict__
+    kwargs = parser.parse_args(raw_args).__dict__
 
     env = trojanvision.environ.create(**kwargs)
     dataset = trojanvision.datasets.create(**kwargs)
     model = trojanvision.models.create(dataset=dataset, **kwargs)
     trainer = trojanvision.trainer.create(dataset=dataset, model=model, **kwargs)
 
-    if env['verbose']:
+    if env["verbose"]:
         trojanvision.summary(env=env, dataset=dataset, model=model, trainer=trainer)
     model._train(**trainer)
+
+
+if __name__ == "__main__":
+    train()
