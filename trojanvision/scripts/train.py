@@ -18,12 +18,18 @@ import argparse
 import trojanvision
 
 
-def train(raw_args=None):
+def train(raw_args=None, help: bool = False):
+    if isinstance(raw_args, str):
+        raw_args = raw_args.split(" ")
     parser = argparse.ArgumentParser()
     trojanvision.environ.add_argument(parser)
     trojanvision.datasets.add_argument(parser)
     trojanvision.models.add_argument(parser)
     trojanvision.trainer.add_argument(parser)
+    if help:
+        parser.print_help()
+        return
+
     kwargs = parser.parse_args(raw_args).__dict__
 
     env = trojanvision.environ.create(**kwargs)
